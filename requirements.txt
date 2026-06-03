@@ -1,0 +1,2 @@
+# Runtime dependencies are provided by ComfyUI.
+# Install ComfyUI-VideoHelperSuite separately for video loading.
