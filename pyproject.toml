@@ -1,0 +1,14 @@
+[project]
+name = "ksk-nodes"
+description = "KSK ComfyUI custom nodes. Currently includes Matrix Pair Batch only."
+version = "0.1.0"
+license = { text = "MIT" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/AI-KSK/KSK-Nodes"
+
+[tool.comfy]
+PublisherId = "ksk"
+DisplayName = "KSK Nodes"
+Icon = ""
