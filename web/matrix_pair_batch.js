@@ -19,8 +19,8 @@ const MANUAL_SIZE_SOURCE = "手动宽高";
 // ---------- 工具 ----------
 const safeParse = (t, f) => { try { const v = JSON.parse(t); return v == null ? f : v; } catch { return f; } };
 const keyOf = (i, j) => `${i},${j}`;
+const keyOfCell = (cell) => keyOf(cell.imageIndex, cell.videoIndex);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-const shuffle = (arr) => { const a = arr.slice(); for (let k = a.length - 1; k > 0; k--) { const r = (Math.random() * (k + 1)) | 0;[a[k], a[r]] = [a[r], a[k]]; } return a; };
 const baseName = (n) => (n || "").split(/[\\/]/).pop();
 const inputThumbUrl = (name) => api.apiURL(`/view?filename=${encodeURIComponent(name)}&type=input&subfolder=&t=${Date.now()}`);
 const isImageName = (n) => /\.(png|jpe?g|webp|bmp)$/i.test(n || "");
@@ -54,6 +54,18 @@ const disconnectSizeInputs = (node) => {
     if (count) node.graph?.setDirtyCanvas?.(true, true);
     return count;
 };
+const assertContinuousDisplayOrder = (orderedSelections, context = "selection") => {
+    const orders = orderedSelections.map(cell => cell.displayOrder);
+    const n = orderedSelections.length;
+    const max = orders.length ? Math.max(...orders) : 0;
+    const unique = new Set(orders);
+    const continuous = orders.slice().sort((a, b) => a - b).every((order, index) => order === index + 1);
+    if (max !== n || unique.size !== n || !continuous) {
+        const message = `[KSK] ${context} 编号不连续：count=${n}, max=${max}, orders=${orders.join(",")}`;
+        console.error(message);
+        throw new Error(message);
+    }
+};
 
 // ---------- 状态 ----------
 class MatrixState {
@@ -85,20 +97,47 @@ class MatrixState {
         }
     }
     save() {
+        this.normalize();
+        assertContinuousDisplayOrder(this.orderedSelections(), "保存选择");
         if (this.wImages) this.wImages.value = JSON.stringify(this.images);
         if (this.wVideos) this.wVideos.value = JSON.stringify(this.videos);
         if (this.wSelection) this.wSelection.value = JSON.stringify(this.orderedPairs());
+        if (this.wActive) this.wActive.value = Math.max(0, Number(this.wActive.value) || 0);
         this.node.graph?.setDirtyCanvas?.(true, true);
     }
     orderedPairs() {
-        return [...this.selected.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k.split(",").map(Number));
+        return this.orderedSelections().map(cell => [cell.imageIndex, cell.videoIndex]);
+    }
+    orderedSelections() {
+        const seen = new Set();
+        const result = [];
+        for (const [k] of [...this.selected.entries()].sort((a, b) => a[1] - b[1])) {
+            const [imageIndex, videoIndex] = k.split(",").map(Number);
+            if (!Number.isInteger(imageIndex) || !Number.isInteger(videoIndex)) continue;
+            if (imageIndex < 0 || imageIndex >= this.images.length) continue;
+            if (videoIndex < 0 || videoIndex >= this.videos.length) continue;
+            const key = keyOf(imageIndex, videoIndex);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            result.push({ imageIndex, videoIndex });
+        }
+        return result.map((cell, index) => ({ ...cell, displayOrder: index + 1 }));
+    }
+    normalize() {
+        const nx = new Map();
+        for (const cell of this.orderedSelections()) nx.set(keyOfCell(cell), cell.displayOrder - 1);
+        this.selected = nx;
+        this._order = nx.size;
+    }
+    orderMap() {
+        return new Map(this.orderedSelections().map(cell => [keyOfCell(cell), cell.displayOrder]));
     }
     isSel(i, j) { return this.selected.has(keyOf(i, j)); }
-    ord(i, j) { return this.selected.get(keyOf(i, j)); }
     toggle(i, j) { const k = keyOf(i, j); this.selected.has(k) ? this.selected.delete(k) : this.selected.set(k, this._order++); this.save(); }
     selectAll() { this.selected.clear(); this._order = 0; for (let i = 0; i < this.images.length; i++) for (let j = 0; j < this.videos.length; j++) this.selected.set(keyOf(i, j), this._order++); this.save(); }
     selectDiagonal() { this.selected.clear(); this._order = 0; const n = Math.min(this.images.length, this.videos.length); for (let i = 0; i < n; i++) this.selected.set(keyOf(i, i), this._order++); this.save(); }
     clear() { this.selected.clear(); this._order = 0; this.save(); }
+    clearAll() { this.images = []; this.videos = []; this.selected.clear(); this._order = 0; if (this.wActive) this.wActive.value = 0; this.save(); }
     invert() { const nx = new Map(); let o = 0; for (let i = 0; i < this.images.length; i++) for (let j = 0; j < this.videos.length; j++) if (!this.isSel(i, j)) nx.set(keyOf(i, j), o++); this.selected = nx; this._order = o; this.save(); }
     toggleRow(i) { const on = this.videos.every((_, j) => this.isSel(i, j)); for (let j = 0; j < this.videos.length; j++) { const k = keyOf(i, j); on ? this.selected.delete(k) : (!this.selected.has(k) && this.selected.set(k, this._order++)); } this.save(); }
     toggleCol(j) { const on = this.images.every((_, i) => this.isSel(i, j)); for (let i = 0; i < this.images.length; i++) { const k = keyOf(i, j); on ? this.selected.delete(k) : (!this.selected.has(k) && this.selected.set(k, this._order++)); } this.save(); }
@@ -227,11 +266,30 @@ async function uploadFiles(fileList) {
     return added;
 }
 
+async function queueCurrentGraph(number = 0) {
+    if (typeof app.graphToPrompt !== "function") {
+        await app.queuePrompt(number, 1);
+        return;
+    }
+
+    const promptData = await app.graphToPrompt();
+    if (!promptData?.output || !promptData?.workflow) {
+        throw new Error("当前画布无法转换为可执行队列数据");
+    }
+
+    await api.queuePrompt(number, {
+        output: promptData.output,
+        workflow: promptData.workflow,
+    });
+}
+
 // ---------- 批量排队 ----------
 async function runBatch(node, state, order, hooks = {}) {
-    const pairs = state.orderedPairs();
+    const orderedSelections = state.orderedSelections();
+    assertContinuousDisplayOrder(orderedSelections, "批量执行选择");
+    const pairs = orderedSelections.map(cell => [cell.imageIndex, cell.videoIndex]);
     if (!pairs.length) { alert("没有选中的组合，请先在网格/树上勾选「图像 × 视频」。"); return; }
-    const idxs = order === "random" ? shuffle(pairs.map((_, i) => i)) : pairs.map((_, i) => i);
+    const idxs = pairs.map((_, i) => i);
     const wActive = state.wActive;
     hooks.setBusy?.(true);
     try {
@@ -240,10 +298,10 @@ async function runBatch(node, state, order, hooks = {}) {
             const idx = idxs[n];
             if (wActive) wActive.value = idx;
             hooks.setStatus?.(`正在排队 ${n + 1}/${idxs.length} ...`, "warn");
-            await app.queuePrompt(0, 1);
+            await queueCurrentGraph(0);
         }
         hooks.setStatus?.(`已排入 ${idxs.length} 条任务`, "ok");
-        console.log(`[KSK] 已排入 ${idxs.length} 条任务，顺序=${order}`);
+        console.log(`[KSK] 已排入 ${idxs.length} 条任务，顺序=UI编号`);
     } catch (e) {
         console.error("[KSK] 批量排队失败:", e);
         hooks.setStatus?.(`批量排队失败：${e?.message || e}`, "err");
@@ -317,8 +375,18 @@ function setupMatrixUI(node) {
     stat.className = "ksk-stat";
     const orderSel = document.createElement("select");
     orderSel.className = "ksk-sel"; orderSel.title = "批量执行顺序";
-    orderSel.innerHTML = `<option value="increment">递增执行</option><option value="random">随机执行</option>`;
+    orderSel.innerHTML = `<option value="increment">按编号执行</option>`;
     const runBtn = mkBtn("🎬 批量执行", "每个勾选组合各排一条独立队列任务", () => runBatch(node, state, orderSel.value, { setStatus, setBusy }), "primary");
+    const clearAllBtn = mkBtn("🗑 批量清空", "清空图像、视频和所有勾选组合", () => {
+        if (!state.images.length && !state.videos.length && !state.orderedSelections().length) {
+            setStatus("当前没有可清空的批量素材", "");
+            return;
+        }
+        if (!confirm("清空本节点中的全部图像、视频和勾选组合？")) return;
+        state.clearAll();
+        setStatus("已批量清空图像、视频和勾选组合", "ok");
+        render();
+    });
     const unlinkSizeBtn = mkBtn("🔓 断开尺寸", "断开 custom_width/custom_height 输入，避免从本节点下游回接造成依赖环", () => {
         const count = disconnectSizeInputs(node);
         setStatus(count ? `已断开 ${count} 个尺寸输入` : "没有已连接的尺寸输入", count ? "ok" : "");
@@ -367,6 +435,7 @@ function setupMatrixUI(node) {
         mkBtn("↘ 对角线", "一一对应：图i × 视频i", () => { state.selectDiagonal(); render(); }),
         mkBtn("🔃 反选", "反转当前勾选", () => { state.invert(); render(); }),
         mkBtn("🧹 清空", "清空所有勾选", () => { state.clear(); render(); }),
+        clearAllBtn,
         unlinkSizeBtn,
         orderSel,
         runBtn,
@@ -455,6 +524,7 @@ function setupMatrixUI(node) {
     }
 
     function renderMatrix() {
+        const orderMap = state.orderMap();
         const grid = document.createElement("div");
         grid.className = "ksk-grid";
         grid.style.gridTemplateColumns = `var(--cell) repeat(${state.videos.length}, var(--cell))`;
@@ -474,11 +544,12 @@ function setupMatrixUI(node) {
             rowHead.appendChild(headThumb(im, () => { state.toggleRow(i); render(); }, () => state.removeImage(i) || render(), false));
             grid.appendChild(rowHead);
             state.videos.forEach((v, j) => {
+                const label = orderMap.get(keyOf(i, j));
                 const cellBox = document.createElement("div");
                 cellBox.className = "ksk-cellbox";
                 const cell = document.createElement("div");
-                cell.className = "ksk-cell" + (state.isSel(i, j) ? " on" : "");
-                if (state.isSel(i, j)) cell.setAttribute("data-ord", state.ord(i, j) + 1);
+                cell.className = "ksk-cell" + (label ? " on" : "");
+                if (label) cell.setAttribute("data-ord", label);
                 cell.title = `图像[${i}] × 视频[${j}]`;
                 cell.onclick = () => { state.toggle(i, j); render(); };
                 cellBox.appendChild(cell);
@@ -491,6 +562,7 @@ function setupMatrixUI(node) {
     }
 
     function renderTree() {
+        const orderMap = state.orderMap();
         const tree = document.createElement("div");
         tree.className = "ksk-tree";
         state.images.forEach((im, i) => {
@@ -511,10 +583,11 @@ function setupMatrixUI(node) {
                 children.appendChild(m);
             }
             state.videos.forEach((v, j) => {
+                const labelOrder = orderMap.get(keyOf(i, j));
                 const chip = document.createElement("div");
-                chip.className = "ksk-chip" + (state.isSel(i, j) ? " on" : "");
+                chip.className = "ksk-chip" + (labelOrder ? " on" : "");
                 const label = document.createElement("span");
-                label.textContent = (state.isSel(i, j) ? `#${state.ord(i, j) + 1} ` : "") + baseName(v);
+                label.textContent = (labelOrder ? `#${labelOrder} ` : "") + baseName(v);
                 chip.append(makeMediaThumb(v, "video"), label);
                 chip.onclick = (e) => { e.stopPropagation(); state.toggle(i, j); render(); };
                 children.appendChild(chip);
@@ -526,7 +599,9 @@ function setupMatrixUI(node) {
     }
 
     function render() {
-        stat.innerHTML = `图像 <b>${state.images.length}</b> · 视频 <b>${state.videos.length}</b> · 已选 <b>${state.selected.size}</b>`;
+        const orderedSelections = state.orderedSelections();
+        assertContinuousDisplayOrder(orderedSelections, "UI 选择");
+        stat.innerHTML = `图像 <b>${state.images.length}</b> · 视频 <b>${state.videos.length}</b> · 已选 <b>${orderedSelections.length}</b>`;
         updateSizeLinkStatus();
         body.innerHTML = "";
         if (!state.images.length || !state.videos.length) {
