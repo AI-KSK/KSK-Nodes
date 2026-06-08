@@ -277,10 +277,30 @@ async function queueCurrentGraph(number = 0) {
         throw new Error("当前画布无法转换为可执行队列数据");
     }
 
-    await api.queuePrompt(number, {
-        output: promptData.output,
-        workflow: promptData.workflow,
+    const promptId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const response = await api.fetchApi("/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            number,
+            prompt_id: promptId,
+            prompt: promptData.output,
+            extra_data: { workflow: promptData.workflow },
+        }),
     });
+
+    if (!response.ok) {
+        let detail = "";
+        try {
+            const data = await response.json();
+            detail = data?.error?.message || data?.error || JSON.stringify(data);
+        } catch {
+            detail = await response.text().catch(() => "");
+        }
+        throw new Error(detail || `HTTP ${response.status}`);
+    }
+
+    return await response.json();
 }
 
 // ---------- 批量排队 ----------
@@ -297,8 +317,10 @@ async function runBatch(node, state, order, hooks = {}) {
         for (let n = 0; n < idxs.length; n++) {
             const idx = idxs[n];
             if (wActive) wActive.value = idx;
+            node.graph?.setDirtyCanvas?.(true, true);
             hooks.setStatus?.(`正在排队 ${n + 1}/${idxs.length} ...`, "warn");
-            await queueCurrentGraph(0);
+            const result = await queueCurrentGraph(0);
+            console.log(`[KSK] queued ${n + 1}/${idxs.length}`, result?.prompt_id);
         }
         hooks.setStatus?.(`已排入 ${idxs.length} 条任务`, "ok");
         console.log(`[KSK] 已排入 ${idxs.length} 条任务，顺序=UI编号`);
