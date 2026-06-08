@@ -267,40 +267,58 @@ async function uploadFiles(fileList) {
 }
 
 async function queueCurrentGraph(number = 0) {
-    if (typeof app.graphToPrompt !== "function") {
-        await app.queuePrompt(number, 1);
-        return;
+    if (typeof app.queuePrompt !== "function") {
+        throw new Error("当前 ComfyUI 前端不支持 queuePrompt");
     }
+    return await app.queuePrompt(number, 1);
+}
 
-    const promptData = await app.graphToPrompt();
-    if (!promptData?.output || !promptData?.workflow) {
-        throw new Error("当前画布无法转换为可执行队列数据");
-    }
+const promptIdFromQueueResult = (result) => {
+    if (!result) return null;
+    if (typeof result === "string") return result;
+    return result.prompt_id ?? result.promptId ?? result?.prompt?.[1] ?? result?.[1] ?? null;
+};
 
-    const promptId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const response = await api.fetchApi("/prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            number,
-            prompt_id: promptId,
-            prompt: promptData.output,
-            extra_data: { workflow: promptData.workflow },
-        }),
-    });
-
-    if (!response.ok) {
-        let detail = "";
-        try {
-            const data = await response.json();
-            detail = data?.error?.message || data?.error || JSON.stringify(data);
-        } catch {
-            detail = await response.text().catch(() => "");
+function applyVhsPreviewFromOutputs(outputs) {
+    if (!outputs || !app.graph) return false;
+    let updated = false;
+    for (const [nodeId, output] of Object.entries(outputs)) {
+        const gif = output?.gifs?.[0];
+        if (!gif) continue;
+        const node =
+            app.graph.getNodeById?.(Number(nodeId)) ??
+            app.graph._nodes_by_id?.[nodeId] ??
+            app.graph._nodes_by_id?.[Number(nodeId)];
+        if (node?.type === "VHS_VideoCombine" && typeof node.updateParameters === "function") {
+            node.updateParameters(gif, true);
+            updated = true;
         }
-        throw new Error(detail || `HTTP ${response.status}`);
     }
+    if (updated) app.graph.setDirtyCanvas?.(true, true);
+    return updated;
+}
 
-    return await response.json();
+async function watchPromptPreview(promptId, hooks = {}) {
+    if (!promptId) return;
+    const started = Date.now();
+    const timeoutMs = 12 * 60 * 60 * 1000;
+    while (Date.now() - started < timeoutMs) {
+        try {
+            const response = await api.fetchApi(`/history/${encodeURIComponent(promptId)}`);
+            if (response.ok) {
+                const data = await response.json();
+                const item = data?.[promptId] ?? data;
+                if (applyVhsPreviewFromOutputs(item?.outputs)) {
+                    hooks.setStatus?.("合并视频预览已刷新", "ok");
+                    return;
+                }
+            }
+        } catch (error) {
+            console.warn("[KSK] 轮询合并视频预览失败:", error);
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    hooks.setStatus?.("已完成排队，但没有等到合并视频预览信息", "warn");
 }
 
 // ---------- 批量排队 ----------
@@ -320,6 +338,7 @@ async function runBatch(node, state, order, hooks = {}) {
             node.graph?.setDirtyCanvas?.(true, true);
             hooks.setStatus?.(`正在排队 ${n + 1}/${idxs.length} ...`, "warn");
             const result = await queueCurrentGraph(0);
+            watchPromptPreview(promptIdFromQueueResult(result), hooks);
             console.log(`[KSK] queued ${n + 1}/${idxs.length}`, result?.prompt_id);
         }
         hooks.setStatus?.(`已排入 ${idxs.length} 条任务`, "ok");

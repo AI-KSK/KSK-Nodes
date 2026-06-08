@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 
 import folder_paths
@@ -51,6 +52,14 @@ def ksk_parse_json_list(text, label):
     if not isinstance(data, list):
         raise ValueError(f"{label} 必须是一个列表")
     return data
+
+
+def ksk_safe_filename_part(value, max_len=48):
+    stem = os.path.splitext(os.path.basename(str(value)))[0]
+    safe = re.sub(r"[^\w.-]+", "_", stem, flags=re.UNICODE).strip("._-")
+    if not safe:
+        safe = "item"
+    return safe[:max_len]
 
 
 def ksk_get_vhs_load_video():
@@ -121,8 +130,8 @@ class KSK_MatrixPairBatch:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "AUDIO", "VHS_VIDEOINFO", "STRING", "INT")
-    RETURN_NAMES = ("参考图", "视频帧", "帧数", "音频", "视频信息", "组合信息", "组合总数")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "AUDIO", "VHS_VIDEOINFO", "STRING", "INT", "STRING")
+    RETURN_NAMES = ("参考图", "视频帧", "帧数", "音频", "视频信息", "组合信息", "组合总数", "文件名前缀")
     FUNCTION = "run"
     CATEGORY = "KSKNODES/批量"
     DESCRIPTION = "图像×视频 矩阵配对批量：可视化网格/树状勾选 + 一次执行排 N 条任务；视频输出与 VHS_LoadVideo 一致。"
@@ -199,9 +208,14 @@ class KSK_MatrixPairBatch:
             f"组合 {idx + 1}/{total} | 图像[{image_index}]={image_name} | "
             f"视频[{video_index}]={video_name} | 尺寸={size_info}"
         )
+        filename_prefix = (
+            f"KSK_Dance_{idx + 1:03d}_"
+            f"img{image_index}_{ksk_safe_filename_part(image_name)}_"
+            f"vid{video_index}_{ksk_safe_filename_part(video_name)}"
+        )
         print(f"\033[96m[KSK MatrixPairBatch] {info} | 帧数={frame_count}\033[0m")
 
-        return (image_tensor, frames, frame_count, audio, video_info, info, total)
+        return (image_tensor, frames, frame_count, audio, video_info, info, total, filename_prefix)
 
     @classmethod
     def IS_CHANGED(cls, image_files, video_files, selection, active_index, **kwargs):
