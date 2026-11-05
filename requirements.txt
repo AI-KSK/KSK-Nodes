@@ -1,2 +1,6 @@
 # Runtime dependencies are provided by ComfyUI.
-# Install ComfyUI-VideoHelperSuite separately for video loading.
+# The original MatrixPairBatch video node optionally needs ComfyUI-VideoHelperSuite.
+# The new PoseCostumeMatrixBatch node optionally reads:
+#   - ComfyUI_Pose-Gallery_ZH
+#   - ComfyUI_Costume-Gallery_ZH
+# These are ComfyUI custom-node plugins, not pip packages; install them separately.

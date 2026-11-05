@@ -1,7 +1,7 @@
 [project]
 name = "ksk-nodes"
-description = "KSK ComfyUI custom nodes. Currently includes Matrix Pair Batch only."
-version = "0.1.0"
+description = "KSK ComfyUI nodes: image x video matrix pairing and pose x costume matrix batch."
+version = "0.2.0"
 license = { text = "MIT" }
 dependencies = []
 
