@@ -30,6 +30,11 @@ class NodeRegistrationTests(unittest.TestCase):
         self.assertIn("KSK_MatrixPairBatch", text)
         self.assertIn("KSK_PoseCostumeMatrixBatch", text)
 
+    def test_flux3_accepts_official_v7_filename(self):
+        routes = (ROOT / "services" / "routes.py").read_text(encoding="utf-8")
+        self.assertIn("flux3-image-klein-int8-convrot.safetensors", routes)
+        self.assertIn("flux3_image_klein_sd_int8_convrot.safetensors", routes)
+
     def test_new_frontend_uses_new_node_type(self):
         core = (ROOT / "web" / "aiksk_pc_core.js").read_text(encoding="utf-8")
         match = re.search(r'export const NODE_TYPE = "([^"]+)"', core)

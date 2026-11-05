@@ -65,7 +65,10 @@ MODEL_SPECS: dict[str, dict] = {
     "flux3klein": {
         "label": "FLUX.3 Klein",
         "required": {
-            "diffusion_models": "flux3_image_klein_sd_int8_convrot.safetensors",
+            "diffusion_models": (
+                "flux3-image-klein-int8-convrot.safetensors",
+                "flux3_image_klein_sd_int8_convrot.safetensors",
+            ),
             "text_encoders": "qwen3vl_4b_int8_convrot.safetensors",
             "vae": "flux2-vae.safetensors",
         },
@@ -507,13 +510,15 @@ def _collect_models(config: "config_module.Config | None" = None) -> dict:
         required: dict[str, dict] = {}
         missing: list[str] = []
         full_paths: list[Path] = []
-        for folder, filename in spec["required"].items():
+        for folder, filenames in spec["required"].items():
             names = cache.setdefault(folder, _available(folder))
-            found = filename in names
+            candidates = (filenames,) if isinstance(filenames, str) else tuple(filenames)
+            found_name = next((name for name in candidates if name in names), None)
+            found = found_name is not None
             full_path = None
             if found:
                 try:
-                    full_path = folder_paths.get_full_path(folder, filename)
+                    full_path = folder_paths.get_full_path(folder, found_name)
                 except Exception:
                     full_path = None
             stat_text = ""
@@ -523,12 +528,12 @@ def _collect_models(config: "config_module.Config | None" = None) -> dict:
                 stat_text = f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}"
                 full_paths.append(path)
                 file_stats.append(stat_text)
-            required[f"{folder}/{filename}"] = {
-                "present": found, "folder": folder, "filename": filename,
+            required[f"{folder}/{found_name or candidates[0]}"] = {
+                "present": found, "folder": folder, "filename": found_name or candidates[0],
                 "path": str(full_path) if full_path else None,
             }
             if not found:
-                missing.append(filename)
+                missing.append(candidates[0])
         optional = {}
         for folder, filename in spec.get("optional", {}).items():
             real_folder = folder.replace("_alt", "")
