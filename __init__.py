@@ -12,9 +12,20 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "KSK_MatrixPairBatch": "KSKNODES 矩阵配对批量 (图×视频)",
 }
 
-WEB_DIRECTORY = "./web"
+# The pose/costume node is optional at import time: a missing gallery/plugin
+# Python dependency must never prevent the original image x video node from loading.
+try:
+    from .nodes_pose_costume import KSK_PoseCostumeMatrixBatch
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+    NODE_CLASS_MAPPINGS["KSK_PoseCostumeMatrixBatch"] = KSK_PoseCostumeMatrixBatch
+    NODE_DISPLAY_NAME_MAPPINGS["KSK_PoseCostumeMatrixBatch"] = "KSKNODES 姿势 × 服装矩阵批量"
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"[KSKNODES] Warning: failed to register Pose x Costume node: {exc}")
+
+WEB_DIRECTORY = "./web"
+NODE_STATUS = {"nodes": True, "routes": False}
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY", "NODE_STATUS"]
 
 
 try:
@@ -81,3 +92,12 @@ try:
     print("[KSKNODES] Matrix Pair Batch HTTP routes registered")
 except Exception as exc:
     print(f"[KSKNODES] Warning: failed to register Matrix Pair Batch HTTP routes: {exc}")
+
+try:
+    from .services.routes import register_routes as register_pose_costume_routes
+
+    register_pose_costume_routes()
+    NODE_STATUS["routes"] = True
+    print("[KSKNODES] Pose x Costume matrix HTTP routes registered")
+except Exception as exc:  # pragma: no cover - defensive
+    print(f"[KSKNODES] Warning: failed to register Pose x Costume routes: {exc}")
